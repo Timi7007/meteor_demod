@@ -9,14 +9,14 @@ inline float lut_tanh(float val);
 
 /* Initialize a Costas loop for carrier frequency/phase recovery */
 Costas*
-costas_init(float bw, ModScheme mode)
+costas_init(float bw, ModScheme mode, float center_freq, float max_delta)
 {
 	int i;
 	Costas *costas;
 
 	costas = safealloc(sizeof(*costas));
 
-	costas->nco_freq = COSTAS_INIT_FREQ;
+	costas->nco_freq = center_freq;
 	costas->nco_phase = 0;
 
 	costas_recompute_coeffs(costas, COSTAS_DAMP, bw);
@@ -24,6 +24,8 @@ costas_init(float bw, ModScheme mode)
 	costas->damping = COSTAS_DAMP;
 	costas->bw = bw;
 	costas->mode = mode;
+	costas->center = center_freq;
+	costas->max_delta = max_delta;
 
 	costas->moving_avg = 1;
 	costas->locked = 0;
@@ -44,7 +46,7 @@ costas_mix(Costas *self, float complex samp)
 
 	nco_out = cexp(-I*self->nco_phase);
 	retval = samp * nco_out;
-	self->nco_phase += self->nco_freq;
+	self->nco_phase = fmod(self->nco_phase + self->nco_freq, 2*M_PI);
 
 	return retval;
 }
@@ -60,7 +62,7 @@ costas_correct_phase(Costas *self, float err)
 
 	/* Detect whether the PLL is locked, and decrease the BW if it is */
 	if (self->mode == OQPSK) {
-		if (!self->locked && self->moving_avg < 0.85) {
+		if (!self->locked && self->moving_avg < 0.87) {
 			costas_recompute_coeffs(self, self->damping, self->bw/3);
 			self->locked = 1;
 		} else if (self->locked && self->moving_avg > 0.9) {
@@ -68,21 +70,20 @@ costas_correct_phase(Costas *self, float err)
 			self->locked = 0;
 		}
 	} else if (self->mode == QPSK) {
-		if (!self->locked && self->moving_avg < 0.5) {
+		if (!self->locked && self->moving_avg < 0.77) {
 			costas_recompute_coeffs(self, self->damping, self->bw/3);
 			self->locked = 1;
-		} else if (self->locked && self->moving_avg > 0.55) {
+		} else if (self->locked && self->moving_avg > 0.82) {
 			costas_recompute_coeffs(self, self->damping, self->bw);
 			self->locked = 0;
 		}
 	}
 
-
 	/* Limit frequency to a sensible range */
-	if (self->nco_freq <= -FREQ_MAX) {
-		self->nco_freq = -FREQ_MAX/2;
-	} else if (self->nco_freq >= FREQ_MAX) {
-		self->nco_freq = FREQ_MAX/2;
+	if (self->nco_freq <= self->center-self->max_delta) {
+		self->nco_freq = self->center-self->max_delta/2;
+	} else if (self->nco_freq >= self->center+self->max_delta) {
+		self->nco_freq = self->center+self->max_delta/2;
 	}
 }
 
